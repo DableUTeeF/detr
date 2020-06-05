@@ -12,6 +12,8 @@ import torchvision
 from pycocotools import mask as coco_mask
 
 import datasets.transforms as T
+from PIL import Image
+import os
 
 
 class CocoDetection(torchvision.datasets.CocoDetection):
@@ -21,7 +23,16 @@ class CocoDetection(torchvision.datasets.CocoDetection):
         self.prepare = ConvertCocoPolysToMask(return_masks)
 
     def __getitem__(self, idx):
-        img, target = super(CocoDetection, self).__getitem__(idx)
+        coco = self.coco
+        img_id = self.ids[idx]
+        ann_ids = coco.getAnnIds(imgIds=img_id)
+        target = coco.loadAnns(ann_ids)
+
+        path = img_id + '.jpg'
+
+        img = Image.open(os.path.join('/media/palm/data/MicroAlgae/16_8_62/images', path)).convert('RGB')
+        if self.transforms is not None:
+            img, target = self.transforms(img, target)
         image_id = self.ids[idx]
         target = {'image_id': image_id, 'annotations': target}
         img, target = self.prepare(img, target)
@@ -50,13 +61,14 @@ def convert_coco_poly_to_mask(segmentations, height, width):
 class ConvertCocoPolysToMask(object):
     def __init__(self, return_masks=False):
         self.return_masks = return_masks
+        self.image_ids = {}
 
     def __call__(self, image, target):
         w, h = image.size
 
-        image_id = target["image_id"]
-        image_id = torch.tensor([image_id])
-
+        if target["image_id"] not in self.image_ids:
+            self.image_ids[target["image_id"]] = len(self.image_ids)
+        image_id = self.image_ids[target["image_id"]]
         anno = target["annotations"]
 
         anno = [obj for obj in anno if 'iscrowd' not in obj or obj['iscrowd'] == 0]
@@ -96,7 +108,7 @@ class ConvertCocoPolysToMask(object):
         target["labels"] = classes
         if self.return_masks:
             target["masks"] = masks
-        target["image_id"] = image_id
+        target["image_id"] = torch.tensor([image_id])
         if keypoints is not None:
             target["keypoints"] = keypoints
 
