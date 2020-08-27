@@ -5,10 +5,10 @@ from models.backbone import Backbone, Joiner
 from models.transformer import Transformer
 from PIL import Image
 import torchvision.transforms as T
-from matplotlib import pyplot as plt
-from evaluate_util import evaluate, all_annotation_from_instance, create_csv_training_instances
-import pickle as pk
+from evaluate_util import add_bbox, all_annotation_from_instance, create_csv_training_instances
 import os
+import cv2
+import numpy as np
 
 
 def make_coco_transforms():
@@ -71,19 +71,15 @@ def rescale_bboxes(out_bbox, size):
     return b
 
 
-def plot_results(pil_img, prob, boxes):
-    plt.figure(figsize=(16, 10))
-    plt.imshow(pil_img)
-    ax = plt.gca()
+def plot_results(pil_img, prob, boxes, fname):
+    pil_img = np.array(pil_img)
+    pil_img = pil_img[..., ::-1]
     for p, (xmin, ymin, xmax, ymax) in zip(prob, boxes.tolist()):
-        ax.add_patch(plt.Rectangle((xmin, ymin), xmax - xmin, ymax - ymin,
-                                   fill=False, color=(0, 1, 0), linewidth=3))
-        cl = p.argmax()
-        text = f'{cl}: {p[cl]:0.2f}'
-        ax.text(xmin, ymin, text, fontsize=15,
-                bbox=dict(facecolor='yellow', alpha=0.5))
-    plt.axis('off')
-    plt.show()
+        cat = p.argmax()
+        pil_img = add_bbox(pil_img, (xmin, ymin, xmax, ymax), cat, ['ov', 'mif'], p[cat])
+    # cv2.imshow('t', pil_img)
+    # cv2.waitKey()
+    cv2.imwrite(fname, pil_img)
 
 
 if __name__ == '__main__':
@@ -123,37 +119,22 @@ if __name__ == '__main__':
         '/home/palm/PycharmProjects/algea/dataset/test_annotations',
         '/home/palm/PycharmProjects/algea/dataset/classes',
     )
+    # os.listdir()
+    all_detections = []
+    all_annotations = []
+    model.cuda()
+    for instance in valid_ints:
+        all_annotation = all_annotation_from_instance(instance)
+        target_image_ori = Image.open(instance["filename"])
+        target_image = transform(target_image_ori)
+        x = torch.zeros((1, *target_image.shape))
+        x[0] = target_image
+        outputs = model(x.cuda())
+        probas = outputs['pred_logits'].softmax(-1)[0, :, :-1]
+        keep = probas.max(-1).values > 0.7
 
-    if not os.path.exists('tmp.pk'):
-        all_detections = []
-        all_annotations = []
-        model.cuda()
-        for instance in valid_ints:
-            all_annotation = all_annotation_from_instance(instance)
-            target_image_ori = Image.open(instance["filename"])
-            target_image = transform(target_image_ori)
-            x = torch.zeros((1, *target_image.shape))
-            x[0] = target_image
-            outputs = model(x.cuda())
-            probas = outputs['pred_logits'].softmax(-1)[0, :, :-1]
-            keep = probas.max(-1).values > 0.7
+        # convert boxes from [0; 1] to image scales
+        bboxes_scaled = rescale_bboxes(outputs['pred_boxes'][0, keep].cpu(), target_image_ori.size).int().cpu().detach().numpy()
+        p = probas[keep]
 
-            # convert boxes from [0; 1] to image scales
-            bboxes_scaled = rescale_bboxes(outputs['pred_boxes'][0, keep].cpu(), target_image_ori.size).int().cpu().detach().numpy()
-            p = probas[keep]
-
-            all_detection = [[], []]
-            for i in range(len(bboxes_scaled)):
-                all_detection[torch.argmax(p[i])].append([*bboxes_scaled[i], torch.max(p[i]).cpu().detach().numpy()])
-
-            all_annotations.append(all_annotation)
-            all_detections.append(all_detection)
-        pk.dump([all_annotations, all_detections], open('tmp.pk', 'wb'))
-    else:
-        all_annotations, all_detections = pk.load(open('tmp.pk', 'rb'))
-    average_precisions, total_instances = evaluate(all_detections, all_annotations, 2)
-    print('mAP using the weighted average of precisions among classes: {:.4f}'.format(
-        sum([a * b for a, b in zip(total_instances, average_precisions)]) / sum(total_instances)))
-    for label, average_precision in average_precisions.items():
-        print(['ov', 'mif'][label] + ': {:.4f}'.format(average_precision))
-    print('mAP: {:.4f}'.format(sum(average_precisions) / sum(x for x in total_instances)))  # mAP: 0.5000
+        plot_results(target_image_ori, p, bboxes_scaled, os.path.join('predict', os.path.basename(instance["filename"])))

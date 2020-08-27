@@ -19,6 +19,7 @@ import os
 class CocoDetection(torchvision.datasets.CocoDetection):
     def __init__(self, img_folder, ann_file, transforms, return_masks):
         super(CocoDetection, self).__init__(img_folder, ann_file)
+        self.img_folder = img_folder
         self._transforms = transforms
         self.prepare = ConvertCocoPolysToMask(return_masks)
 
@@ -30,7 +31,7 @@ class CocoDetection(torchvision.datasets.CocoDetection):
 
         path = img_id + '.jpg'
 
-        img = Image.open(os.path.join('/media/palm/data/MicroAlgae/16_8_62/images', path)).convert('RGB')
+        img = Image.open(os.path.join(self.img_folder, path)).convert('RGB')
         if self.transforms is not None:
             img, target = self.transforms(img, target)
         image_id = self.ids[idx]
@@ -161,8 +162,8 @@ def build(image_set, args):
     assert root.exists(), f'provided COCO path {root} does not exist'
     mode = 'instances'
     PATHS = {
-        "train": (root / "train2017", root / "annotations" / f'{mode}_train2017.json'),
-        "val": (root / "val2017", root / "annotations" / f'{mode}_val2017.json'),
+        "train": (root / "images", root / "annotations" / f'{mode}_train2017.json'),
+        "val": (root / "images", root / "annotations" / f'{mode}_val2017.json'),
     }
 
     img_folder, ann_file = PATHS[image_set]
