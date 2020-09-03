@@ -1,12 +1,12 @@
 import torch
 from models.detr import DETR, PostProcess
 from models.position_encoding import PositionEmbeddingLearned, PositionEmbeddingSine
-from models.backbone import Backbone, Joiner
+from models.backbone import Backbone, Joiner, MNetBackbone
 from models.transformer import Transformer
 from PIL import Image
 import torchvision.transforms as T
 from evaluate_util import add_bbox, all_annotation_from_instance, create_csv_training_instances
-import os
+import time
 import cv2
 import numpy as np
 
@@ -17,7 +17,7 @@ def make_coco_transforms():
         T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
     return T.Compose([
-        T.Resize(800),
+        T.Resize((416, 640)),
         normalize,
     ])
 
@@ -38,7 +38,10 @@ def build_backbone(lr_backbone, masks, backbone, dilation, hidden_dim, position_
     position_embedding = build_position_encoding(hidden_dim, position_embedding)
     train_backbone = lr_backbone > 0
     return_interm_layers = masks
-    backbone = Backbone(backbone, train_backbone, return_interm_layers, dilation)
+    if 'resnet' in backbone:
+        backbone = Backbone(backbone, train_backbone, return_interm_layers, dilation)
+    elif 'mobilenet' in backbone:
+        backbone = MNetBackbone(train_backbone, return_interm_layers)
     model = Joiner(backbone, position_embedding)
     model.num_channels = backbone.num_channels
     return model
@@ -87,7 +90,7 @@ if __name__ == '__main__':
     position_embedding = 'sine'
     lr_backbone = 1e-5
     masks = False
-    backbone = 'resnet50'
+    backbone = 'mobilenet_v2'
     dilation = False
     dropout = 0.1
     nheads = 8
@@ -124,17 +127,18 @@ if __name__ == '__main__':
     all_annotations = []
     model.cuda()
     for instance in valid_ints:
+        t = time.time()
         all_annotation = all_annotation_from_instance(instance)
         target_image_ori = Image.open(instance["filename"])
         target_image = transform(target_image_ori)
         x = torch.zeros((1, *target_image.shape))
-        x[0] = target_image
+        # x[0] = target_image
         outputs = model(x.cuda())
         probas = outputs['pred_logits'].softmax(-1)[0, :, :-1]
         keep = probas.max(-1).values > 0.7
 
         # convert boxes from [0; 1] to image scales
         bboxes_scaled = rescale_bboxes(outputs['pred_boxes'][0, keep].cpu(), target_image_ori.size).int().cpu().detach().numpy()
-        p = probas[keep]
-
-        plot_results(target_image_ori, p, bboxes_scaled, os.path.join('predict', os.path.basename(instance["filename"])))
+        # p = probas[keep]
+        print(time.time() - t)
+        # plot_results(target_image_ori, p, bboxes_scaled, os.path.join('predict', os.path.basename(instance["filename"])))

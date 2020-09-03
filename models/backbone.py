@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import torchvision
 from torch import nn
 from torchvision.models._utils import IntermediateLayerGetter
-
+from .mobilenet import mobilenet_v2
 from util.misc import NestedTensor
 
 from .position_encoding import build_position_encoding
@@ -88,6 +88,30 @@ class Backbone(BackboneBase):
             pretrained=True, norm_layer=FrozenBatchNorm2d)
         num_channels = 512 if name in ('resnet18', 'resnet34') else 2048
         super().__init__(backbone, train_backbone, num_channels, return_interm_layers)
+
+
+class MNetBackbone(nn.Module):
+    def __init__(self, train_backbone: bool, return_interm_layers: bool):
+        super().__init__()
+        backbone = mobilenet_v2(pretrained=True, norm_layer=FrozenBatchNorm2d)
+        num_channels = 1280
+        for name, parameter in backbone.named_parameters():
+            if not train_backbone or 'layer2' not in name and 'layer3' not in name and 'layer4' not in name:
+                parameter.requires_grad_(False)
+        if return_interm_layers:
+            return_layers = {"layer1": "0", "layer2": "1", "layer3": "2", "layer4": "3"}
+        else:
+            return_layers = {'layer4': 0}
+        self.body = IntermediateLayerGetter(backbone, return_layers=return_layers)
+        self.num_channels = num_channels
+
+    def forward(self, tensor_list):
+        xs = self.body(tensor_list.tensors)
+        out = OrderedDict()
+        for name, x in xs.items():
+            mask = F.interpolate(tensor_list.mask[None].float(), size=x.shape[-2:]).bool()[0]
+            out[name] = NestedTensor(x, mask)
+        return out
 
 
 class Joiner(nn.Sequential):
